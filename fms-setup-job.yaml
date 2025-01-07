@@ -1,0 +1,90 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fms-setup-job
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: fms-setup
+        image: brice92/dockerfms:v1
+        command:
+          - /bin/bash
+          - -c
+          - |
+            set -e
+
+            # Création des répertoires nécessaires
+            echo "Création des répertoires d'installation et de licence..."
+            mkdir -p /install /licence /data
+
+            # Téléchargement des fichiers uniquement s'ils n'existent pas déjà
+            echo "Vérification des fichiers d'installation et de licence..."
+            if [ ! -f /install/fms_20.2.1.19_Ubuntu20_amd64.zip ]; then
+              echo "Téléchargement du fichier d'installation..."
+              wget -P /install $(cat /config/install_url)
+            else
+              echo "Le fichier d'installation existe déjà, saut du téléchargement."
+            fi
+
+            if [ ! -f /licence/LicenseCert.fmcert ]; then
+              echo "Téléchargement du fichier de licence..."
+              wget -P /licence $(cat /config/licence_url)
+            else
+              echo "Le fichier de licence existe déjà, saut du téléchargement."
+            fi
+
+            # Décompression des fichiers d'installation uniquement si le fichier ZIP existe
+            echo "Vérification du fichier d'installation pour décompression..."
+            install_file=$(find /install -type f -name "fms_20.2.1.19_Ubuntu20_amd64.zip" | head -n 1)
+            if [ -z "$install_file" ]; then
+              echo "Aucun fichier d'installation trouvé. Abandon de l'installation."
+              exit 1
+            fi
+
+            echo "Décompression des fichiers d'installation..."
+            unzip -o "$install_file" -d /install
+
+            # Création et configuration du fichier Assisted Install.txt
+            echo "Configuration du fichier Assisted Install..."
+            random_password=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 12)
+            assisted_install_file="/install/Assisted Install.txt"
+            echo "[Assisted Install]" > "$assisted_install_file"
+            echo "License Accepted=1" >> "$assisted_install_file"
+            echo "Deployment Options=0" >> "$assisted_install_file"
+            echo "Admin Console User=fms-admin" >> "$assisted_install_file"
+            echo "Admin Console Password=$random_password" >> "$assisted_install_file"
+            echo "Admin Console PIN=1234" >> "$assisted_install_file"
+            echo "License Certificate Path=/opt/FileMaker/FileMaker Server/Licence/LicenseCert.fmcert" >> "$assisted_install_file"
+            echo "Filter Databases=1" >> "$assisted_install_file"
+            echo "Remove Desktop Shortcut=0" >> "$assisted_install_file"
+            echo "Remove Sample Database=0" >> "$assisted_install_file"
+
+            # Création d'un fichier de signalisation pour indiquer que le job est terminé
+            touch /data/setup_done
+            echo "Fichier setup_done créé avec succès."
+        volumeMounts:
+        - name: config-volume
+          mountPath: /config
+          readOnly: true
+        - name: install-volume
+          mountPath: /install
+        - name: licence-volume
+          mountPath: /licence
+        - name: data-volume
+          mountPath: /data
+      restartPolicy: Never
+      volumes:
+      - name: config-volume
+        configMap:
+          name: fms-config
+      - name: install-volume
+        persistentVolumeClaim:
+          claimName: pvc-install
+      - name: licence-volume
+        persistentVolumeClaim:
+          claimName: pvc-licence
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: pvc-data
