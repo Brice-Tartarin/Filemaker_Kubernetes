@@ -1,91 +1,102 @@
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: filemaker-pod
+  name: filemaker-deployment
+  labels:
+    app: filemaker
 spec:
-  containers:
-  - name: filemaker
-    image: brice92/filemaker:v1
-    imagePullPolicy: Always
-    command:
-      - /usr/lib/systemd/systemd
-    securityContext:
-      privileged: true
-      capabilities:
-        add: ["SYS_ADMIN"]
-    ports:
-      - containerPort: 80
-      - containerPort: 443
-      - containerPort: 2399
-      - containerPort: 5003
-    volumeMounts:
+  replicas: 3  # Nombre de réplicas souhaités
+  selector:
+    matchLabels:
+      app: filemaker
+  template:
+    metadata:
+      labels:
+        app: filemaker
+    spec:
+      containers:
+      - name: filemaker
+        image: brice92/filemaker:v1
+        imagePullPolicy: Always
+        command:
+          - /usr/lib/systemd/systemd
+        securityContext:
+          privileged: true
+          capabilities:
+            add: ["SYS_ADMIN"]
+        ports:
+          - containerPort: 80
+          - containerPort: 443
+          - containerPort: 2399
+          - containerPort: 5003
+        volumeMounts:
+          - name: cgroup
+            mountPath: /sys/fs/cgroup
+            readOnly: true
+          - name: tmp
+            mountPath: /tmp
+            subPath: tmp
+          - name: tmp
+            mountPath: /run
+            subPath: run
+          - name: tmp
+            mountPath: /run/lock
+            subPath: run-lock
+          - name: install-volume
+            mountPath: /install
+          - name: data-volume
+            mountPath: /opt/FileMaker/FileMaker Server/Data
+          - name: licence-volume
+            mountPath: /opt/FileMaker/FileMaker Server/Licence
+
+      initContainers:
+      - name: licence-copy
+        image: brice92/filemaker:v1
+        command:
+          - /bin/bash
+          - -c
+          - |
+             echo "Vérification de la signalisation du job..."
+             while [ ! -f /data/setup_done ]; do
+               echo "Le fichier de signalisation n'est pas encore présent. Attente..."
+               sleep 5
+             done
+             echo "Fichier de signalisation trouvé, attente du fichier de licence..."
+
+             # Attente jusqu'à ce que le fichier de licence soit disponible
+             while [ ! -f /opt/FileMaker/FileMaker Server/Licence/LicenseCert.fmcert ]; do
+               echo "Le fichier de licence n'est pas encore disponible. Attente..."
+               sleep 5
+             done
+
+             echo "Fichier de licence trouvé"
+             # Exécuter les mises à jour nécessaires et l'installation de FileMaker Server
+             echo "Mise à jour du système et installation des dépendances..."
+             apt update && apt upgrade -y && apt install -y libcurl3-gnutls
+             echo "Installation de FileMaker Server..."
+             FM_ASSISTED_INSTALL=/install apt install -y /install/filemaker-server-20.2.1.19-amd64.deb
+             echo "FileMaker Server installé avec succès."
+        volumeMounts:
+          - name: data-volume
+            mountPath: /data
+          - name: licence-volume
+            mountPath: /licence
+
+      volumes:
       - name: cgroup
-        mountPath: /sys/fs/cgroup
-        readOnly: true
+        hostPath:
+          path: /sys/fs/cgroup
+          type: Directory
       - name: tmp
-        mountPath: /tmp
-        subPath: tmp
-      - name: tmp
-        mountPath: /run
-        subPath: run
-      - name: tmp
-        mountPath: /run/lock
-        subPath: run-lock
+        emptyDir:
+          medium: Memory
+          sizeLimit: 128Mi
       - name: install-volume
-        mountPath: /install
+        persistentVolumeClaim:
+          claimName: pvc-install
       - name: data-volume
-        mountPath: /opt/FileMaker/FileMaker Server/Data
+        persistentVolumeClaim:
+          claimName: pvc-data
       - name: licence-volume
-        mountPath: /opt/FileMaker/FileMaker Server/Licence
-
-  initContainers:
-  - name: licence-copy
-    image: brice92/filemaker:v1
-    command:
-      - /bin/bash
-      - -c
-      - |
-         echo "Vérification de la signalisation du job..."
-         while [ ! -f /data/setup_done ]; do
-           echo "Le fichier de signalisation n'est pas encore présent. Attente..."
-           sleep 5
-         done
-         echo "Fichier de signalisation trouvé, attente du fichier de licence..."
-
-         # Attente jusqu'à ce que le fichier de licence soit disponible
-         while [ ! -f /opt/FileMaker/FileMaker Server/Licence/LicenseCert.fmcert ]; do
-           echo "Le fichier de licence n'est pas encore disponible. Attente..."
-           sleep 5
-         done
-
-         echo "Fichier de licence trouvé"
-         # Exécuter les mises à jour nécessaires et l'installation de FileMaker Server
-         echo "Mise à jour du système et installation des dépendances..."
-         apt update && apt upgrade -y && apt install -y libcurl3-gnutls
-         echo "Installation de FileMaker Server..."
-         FM_ASSISTED_INSTALL=/install apt install -y /install/filemaker-server-20.2.1.19-amd64.deb
-         echo "FileMaker Server installé avec succès."
-    volumeMounts:
-      - name: data-volume
-        mountPath: /data
-      - name: licence-volume
-        mountPath: /licence
-
-  volumes:
-  - name: cgroup
-    hostPath:
-      path: /sys/fs/cgroup
-      type: Directory
-  - name: tmp
-    emptyDir:
-      medium: Memory
-      sizeLimit: 128Mi
-  - name: install-volume
-    persistentVolumeClaim:
-      claimName: pvc-install
-  - name: data-volume
-    persistentVolumeClaim:
-      claimName: pvc-data
-  - name: licence-volume
-    persistentVolumeClaim:
-      claimName: pvc-licence
+        persistentVolumeClaim:
+          claimName: pvc-licence
